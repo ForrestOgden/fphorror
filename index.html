@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#050505" />
+  <title>NULL FLOOR</title>
+  <link rel="stylesheet" href="/src/style.css" />
+  <script type="module" src="/src/main.js"></script>
+</head>
+<body>
+  <div id="game"></div>
+
+  <div id="grain"></div>
+  <div id="vignette"></div>
+  <div id="blood"></div>
+  <div id="flash"></div>
+  <div id="fade"></div>
+
+  <main id="menu" class="screen visible">
+    <div class="menu-card">
+      <p class="eyebrow">A THREE.JS PSYCHOLOGICAL HORROR EXPERIENCE</p>
+      <h1>NULL<br/>FLOOR</h1>
+      <p class="tagline">The elevator only goes down.</p>
+      <button id="startBtn" class="primary">NEW DESCENT</button>
+      <button id="continueBtn" class="ghost" hidden>CONTINUE</button>
+      <button id="settingsBtn" class="ghost">SETTINGS</button>
+      <div class="controls-mini">WASD MOVE · MOUSE LOOK · SHIFT SPRINT · E INTERACT · F FLASHLIGHT · ESC PAUSE<br>GAMEPAD: LEFT STICK MOVE · RIGHT STICK LOOK · A INTERACT · X FLASHLIGHT · LB/LS SPRINT · MENU PAUSE</div>
+    </div>
+    <div id="assetBadge">LOADING ART PIPELINE</div><div class="version">v2.0 escape build</div>
+  </main>
+
+  <section id="settings" class="screen panel-screen">
+    <div class="panel">
+      <div class="panel-head"><h2>SETTINGS</h2><button data-close="settings">×</button></div>
+      <label>Mouse sensitivity <input id="sens" type="range" min="0.0007" max="0.0045" step="0.0001" value="0.0020"></label>
+      <label>Master volume <input id="volume" type="range" min="0" max="1" step="0.01" value="0.72"></label>
+      <label>Render scale <select id="scale"><option value="1">100%</option><option value="0.85">85%</option><option value="0.7">70%</option></select></label>
+      <label class="toggle"><input id="filmGrain" type="checkbox" checked> Film grain</label>
+      <label class="toggle"><input id="headBob" type="checkbox" checked> Camera motion</label>
+    </div>
+  </section>
+
+  <section id="pause" class="screen panel-screen">
+    <div class="panel compact">
+      <p class="eyebrow">PAUSED</p>
+      <h2>DON'T STAY HERE.</h2>
+      <button id="resumeBtn" class="primary">RESUME</button>
+      <button id="restartBtn" class="ghost">RESTART FLOOR</button>
+      <button id="quitBtn" class="ghost">MAIN MENU</button>
+    </div>
+  </section>
+
+  <div id="hud">
+    <div id="floorTag">FLOOR 08</div>
+    <div id="objective">Reach the service elevator.</div>
+    <div id="prompt"></div>
+    <div id="crosshair"><span></span><span></span></div>
+    <div id="stamina"><div></div></div>
+    <div id="inventory"><span class="inventory-label">OVERRIDE</span><span data-part="fuse">FUSE</span><span data-part="key">KEY</span><span data-part="relay">RELAY</span></div>
+    <div id="toast"></div>
+  </div>
+
+  <section id="death" class="screen panel-screen">
+    <div class="panel compact death-panel">
+      <p class="eyebrow">YOU WERE SEEN</p>
+      <h2>THE FLOOR REMEMBERS.</h2>
+      <button id="deathRestart" class="primary">WAKE UP HERE</button>
+    </div>
+  </section>
+
+  <section id="cinematic" class="screen cinematic-screen">
+    <div class="cinematic-copy">
+      <p id="cinematicKicker" class="eyebrow">TENANT RECORD 013</p>
+      <h2 id="cinematicLine">CHECK-IN: FLOOR 08</h2>
+    </div>
+  </section>
+
+  <section id="paywall" class="screen paywall-screen">
+    <div class="paywall-card">
+      <p class="eyebrow">PROLOGUE COMPLETE</p>
+      <h2>YOU<br><span>ESCAPED.</span></h2>
+      <p>You restored the emergency override and escaped the Null Floor. The $6.99 full release continues with new wings of the building, additional entities, adaptive hauntings, multiple endings, and the origin of Tenant 013.</p>
+      <div class="price"><strong>$6.99</strong><small>ONE-TIME PURCHASE</small></div>
+      <button id="buyBtn" class="primary">UNLOCK FULL GAME</button>
+      <button id="replayBtn" class="ghost">REPLAY PROLOGUE</button>
+      <p id="checkoutNote" class="fine">Checkout endpoint is ready to connect to Stripe before launch.</p>
+    </div>
+  </section>
+</body>
+</html>
