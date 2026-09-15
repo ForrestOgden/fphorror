@@ -1,0 +1,48 @@
+name: Import NULL FLOOR working state
+
+on:
+  push:
+    paths:
+      - '.bootstrap/READY'
+
+permissions:
+  contents: write
+
+jobs:
+  import-current-state:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore current source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/corechunk.* | base64 --decode > /tmp/nullfloor-core.tgz
+          gzip -t /tmp/nullfloor-core.tgz
+          tar -xzf /tmp/nullfloor-core.tgz -C .
+          test -s src/main.js
+          test -s src/style.css
+          test -s index.html
+          test -s tools/cache-assets.mjs
+          node --check src/main.js
+          node --check tools/cache-assets.mjs
+          node --check tools/verify-assets.mjs
+
+      - name: Commit canonical v2.0 source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .bootstrap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+          git commit -m "snapshot: import NULL FLOOR v2.0 working state"
+          git push origin HEAD:main
