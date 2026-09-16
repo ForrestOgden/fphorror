@@ -59,6 +59,9 @@ const state = {
   walkPhase: 0,
   moveSpeed: 0,
   inventory: { fuse: false, key: false, relay: false },
+  weapon: false,
+  weaponDurability: 0,
+  beastStunUntil: 0,
   currentInteractable: null,
   winReady: false,
 };
@@ -530,16 +533,35 @@ world.add(mutable);
 const blockers = [];
 const ceilingLights = [];
 const doorLabels = [];
+const doorRecords = [];
+const activeRoomZones = [];
 const portraits = [];
 const baseProps = {};
 
 meshBox('floor', new THREE.Vector3(6.6, .16, 42), new THREE.Vector3(0, -.08, 0), floorMat, corridor, false);
 meshBox('ceiling', new THREE.Vector3(6.6, .18, 42), new THREE.Vector3(0, 4.02, 0), ceilingMat, corridor, false);
-meshBox('leftWall', new THREE.Vector3(.18, 4, 42), new THREE.Vector3(-3.3, 2, 0), wallMat, corridor, false);
-meshBox('rightWall', new THREE.Vector3(.18, 4, 42), new THREE.Vector3(3.3, 2, 0), wallMat, corridor, false);
 meshBox('leftTrim', new THREE.Vector3(.12, .18, 42), new THREE.Vector3(-3.18, .13, 0), trimMat, corridor, false);
 meshBox('rightTrim', new THREE.Vector3(.12, .18, 42), new THREE.Vector3(3.18, .13, 0), trimMat, corridor, false);
-blockers.push({ minX: -3.28, maxX: -3.0, minZ: -21, maxZ: 21 }, { minX: 3.0, maxX: 3.28, minZ: -21, maxZ: 21 });
+
+// Corridor side walls are segmented around every doorway. This gives real portal openings so
+// selected apartments/service rooms can be entered instead of faking an open door against a solid wall.
+const doorZs = [-13, -7, -1, 5, 11];
+function buildSegmentedCorridorWall(side) {
+  const x = side * 3.3;
+  const gapHalf = .88;
+  let cursor = -21;
+  for (const z of doorZs) {
+    const end = z - gapHalf;
+    const len = end - cursor;
+    if (len > .02) meshBox('wall-segment', new THREE.Vector3(.18, 4, len), new THREE.Vector3(x, 2, cursor + len / 2), wallMat, corridor, false);
+    meshBox('door-wall-header', new THREE.Vector3(.18, 1.02, gapHalf * 2), new THREE.Vector3(x, 3.49, z), wallMat, corridor, false);
+    cursor = z + gapHalf;
+  }
+  const len = 21 - cursor;
+  if (len > .02) meshBox('wall-segment', new THREE.Vector3(.18, 4, len), new THREE.Vector3(x, 2, cursor + len / 2), wallMat, corridor, false);
+}
+buildSegmentedCorridorWall(-1);
+buildSegmentedCorridorWall(1);
 
 function textTexture(text, fg = '#d7d4ca', bg = 'rgba(0,0,0,0)', w = 256, h = 128) {
   const c = document.createElement('canvas');
@@ -561,22 +583,46 @@ function textTexture(text, fg = '#d7d4ca', bg = 'rgba(0,0,0,0)', w = 256, h = 12
 
 function buildDoor(side, z, num) {
   const x = side * 3.18;
-  const d = meshBox(`door-${num}`, new THREE.Vector3(.12, 2.65, 1.46), new THREE.Vector3(x, 1.39, z), doorMat, corridor);
+  const pivot = new THREE.Group();
+  pivot.name = `door-pivot-${num}`;
+  pivot.position.set(x, 0, z - .73);
+  corridor.add(pivot);
+
+  const panel = meshBox(`door-${num}`, new THREE.Vector3(.12, 2.65, 1.46), new THREE.Vector3(0, 1.39, .73), doorMat, pivot);
+  // Three shallow raised/inset zones give the pine doors architectural depth instead of a flat slab.
+  for (const y of [.86, 1.68, 2.28]) {
+    const h = y < 1 ? .52 : .42;
+    meshBox('door-inset', new THREE.Vector3(.018, h, .92), new THREE.Vector3(-side * .071, y, .73), trimMat, pivot, false);
+  }
+
   meshBox('frame', new THREE.Vector3(.16, 2.92, .1), new THREE.Vector3(x - side * .06, 1.5, z - .79), trimMat, corridor);
   meshBox('frame', new THREE.Vector3(.16, 2.92, .1), new THREE.Vector3(x - side * .06, 1.5, z + .79), trimMat, corridor);
   meshBox('frame', new THREE.Vector3(.16, .12, 1.7), new THREE.Vector3(x - side * .06, 2.94, z), trimMat, corridor);
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(.055, 12, 12), metalMat);
-  knob.position.set(x - side * .08, 1.25, z + side * .48);
-  corridor.add(knob);
+
+  const knobStem = new THREE.Mesh(new THREE.CylinderGeometry(.022, .022, .10, 12), metalMat);
+  knobStem.rotation.z = Math.PI / 2;
+  knobStem.position.set(-side * .08, 1.25, 1.18);
+  pivot.add(knobStem);
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(.058, 16, 12), brassMat);
+  knob.position.set(-side * .14, 1.25, 1.18);
+  pivot.add(knob);
+
   const plate = new THREE.Mesh(new THREE.PlaneGeometry(.44, .2), new THREE.MeshBasicMaterial({ map: textTexture(num), transparent: true }));
   plate.position.set(x - side * .071, 2.25, z);
   plate.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
   corridor.add(plate);
-  doorLabels.push({ mesh: plate, base: num });
-  return d;
+
+  const rec = {
+    index: doorRecords.length,
+    side, z, base: num, pivot, panel, knob, label: plate,
+    unlocked: false, open: false, opening: false, roomActive: false, roomType: null,
+  };
+  doorRecords.push(rec);
+  doorLabels.push({ mesh: plate, base: num, record: rec });
+  return rec;
 }
 
-[-13, -7, -1, 5, 11].forEach((z, i) => {
+doorZs.forEach((z, i) => {
   buildDoor(-1, z, String(801 + i * 2).padStart(3, '0'));
   buildDoor(1, z, String(802 + i * 2).padStart(3, '0'));
 });
@@ -803,28 +849,52 @@ createPortrait(-10, 1);
 createPortrait(2, 1);
 createPortrait(13, 1);
 
+async function placeWallSconceAssembly(side, z, y = 2.52) {
+  // The Poly Haven lamp is treated as one authored fixture and mounted to a backing plate/conduit.
+  // This avoids the old "loose lamp parts floating on a wall" look and gives it a believable power path.
+  const mount = meshBox('sconce-mount', new THREE.Vector3(.055,.42,.34), new THREE.Vector3(side*3.055,y,z), elevatorPaintMat, decor, false);
+  const conduit = meshBox('sconce-conduit', new THREE.Vector3(.035,.78,.035), new THREE.Vector3(side*3.06,y+.56,z), metalMat, decor, false);
+  mount.castShadow = conduit.castShadow = false;
+  const bulb = new THREE.PointLight(0xe0c59d, 2.8, 4.2, 2.1);
+  bulb.position.set(side*2.82,y-.02,z);
+  decor.add(bulb);
+  return spawnPolyProp('industrial_caged_sconce', {
+    parent: decor,
+    position:[side*3.01,y,z],
+    rotation:[0,side>0 ? -Math.PI/2 : Math.PI/2,0],
+    scale:.48,
+    name:`assembled-sconce-${side}-${z}`,
+  });
+}
+
+function addExtinguisherBracket(side, z, y = 1.06) {
+  meshBox('extinguisher-bracket', new THREE.Vector3(.045,.30,.22), new THREE.Vector3(side*3.055,y,z), elevatorPaintMat, decor, false);
+  meshBox('extinguisher-strap', new THREE.Vector3(.09,.045,.30), new THREE.Vector3(side*2.99,y-.02,z), metalMat, decor, false);
+}
+
 async function populatePolyHavenDecor() {
+  addExtinguisherBracket(1,-15.7,1.02);
   const jobs = [
     spawnPolyProp('WoodenChair_01', { parent: decor, position: [-2.25, 0, 8.6], rotation: [0, Math.PI / 2, 0], scale: .72, name: 'ph-chair' }).then((o) => baseProps.chair = o),
     spawnPolyProp('painted_wooden_cabinet', { parent: decor, position: [2.62, 0, -9.1], rotation: [0, -Math.PI / 2, 0], scale: .88, name: 'ph-cabinet' }).then((o) => baseProps.cabinet = o),
     spawnPolyProp('vintage_suitcase', { parent: decor, position: [2.25, .03, 4.2], rotation: [0, -1.2, 0], scale: .55, name: 'ph-suitcase' }).then((o) => baseProps.suitcase = o),
     spawnPolyProp('metal_trash_can', { parent: decor, position: [-2.35, 0, -14.8], rotation: [0, .35, 0], scale: .52, name: 'ph-trashcan' }).then((o) => baseProps.trash = o),
     spawnPolyProp('trashbag', { parent: decor, position: [-2.0, 0, -12.9], rotation: [0, -.2, 0], scale: .7, name: 'ph-trashbag' }).then((o) => baseProps.trashbag = o),
-    spawnPolyProp('industrial_wall_lamp', { parent: decor, position: [-3.05, 2.65, -4], rotation: [0, Math.PI / 2, 0], scale: .85, name: 'ph-wall-lamp' }),
+    placeWallSconceAssembly(-1,-4,2.52),
     spawnPolyProp('painted_wooden_bench', { parent: decor, position: [-2.45, 0, -4.7], rotation: [0, Math.PI / 2, 0], scale: .9, name: 'ph-bench' }),
     spawnPolyProp('cardboard_box_01', { parent: decor, position: [2.42, 0, 14.1], rotation: [0, -.45, 0], scale: .9, name: 'ph-box' }),
-    spawnPolyProp('korean_fire_extinguisher_01', { parent: decor, position: [2.74, 0, -15.7], rotation: [0, -Math.PI / 2, 0], scale: .9, name: 'ph-extinguisher' }),
+    spawnPolyProp('korean_fire_extinguisher_01', { parent: decor, position: [2.76, .42, -15.7], rotation: [0, -Math.PI / 2, 0], scale: .76, name: 'ph-extinguisher' }),
     spawnPolyProp('small_wooden_table_01', { parent: decor, position: [-2.45, 0, 14.8], rotation: [0, Math.PI / 2, 0], scale: .75, name: 'ph-side-table' }),
     spawnPolyProp('power_box_01', { parent: decor, position: [-3.03, 1.25, -17.1], rotation: [0, Math.PI / 2, 0], scale: 1.08, name: 'ph-power-box' }).then((o) => baseProps.powerBox = o),
     spawnPolyProp('utility_box_01', { parent: decor, position: [2.62, 0, 16.2], rotation: [0, -Math.PI / 2, 0], scale: .62, name: 'ph-utility-box' }),
-    spawnPolyProp('industrial_caged_sconce', { parent: decor, position: [3.02, 2.45, 17.4], rotation: [0, -Math.PI / 2, 0], scale: .52, name: 'ph-caged-sconce-a' }),
-    spawnPolyProp('industrial_caged_sconce', { parent: decor, position: [-3.02, 2.45, -17.4], rotation: [0, Math.PI / 2, 0], scale: .52, name: 'ph-caged-sconce-b' }),
-    spawnPolyProp('modular_electric_cables', { parent: decor, position: [-2.95, 2.8, 0], rotation: [0, Math.PI / 2, 0], scale: .42, name: 'ph-cables' }),
+    placeWallSconceAssembly(1,17.4,2.46),
+    placeWallSconceAssembly(-1,-17.4,2.46),
+    spawnPolyProp('modular_electric_cables', { parent: decor, position: [-2.96, 2.42, -16.45], rotation: [0, Math.PI / 2, 0], scale: .34, name: 'ph-cables' }),
     spawnPolyProp('security_camera_01', { parent: decor, position: [2.94, 3.15, -11.8], rotation: [0, -Math.PI / 2, -.08], scale: .55, name: 'ph-security-camera' }).then((o) => baseProps.securityCamera = o),
     spawnPolyProp('fire_alarm', { parent: decor, position: [-3.05, 1.42, 6.7], rotation: [0, Math.PI / 2, 0], scale: 1.25, name: 'ph-fire-alarm' }),
     spawnPolyProp('barrel_03', { parent: decor, position: [-2.52, 0, 16.0], rotation: [0, .18, 0], scale: .68, name: 'ph-barrel' }),
-    spawnPolyProp('can_rusted', { parent: decor, position: [2.42, .08, -13.6], rotation: [0, -.28, .05], scale: .9, name: 'ph-rusted-can' }),
-    spawnPolyProp('pipe_wrench', { parent: decor, position: [-2.36, .82, 14.7], rotation: [0, .25, Math.PI / 2], scale: .62, name: 'ph-pipe-wrench' }),
+    spawnPolyProp('can_rusted', { parent: decor, position: [-2.38, .76, 14.48], rotation: [0, -.28, .05], scale: .72, name: 'ph-rusted-can' }),
+    spawnPolyProp('pipe_wrench', { parent: decor, position: [-2.42, .78, 14.84], rotation: [0, .25, Math.PI / 2], scale: .56, name: 'ph-pipe-wrench-decor' }),
   ];
   for (const p of portraits) {
     jobs.push(spawnPolyProp('fancy_picture_frame_01', {
@@ -1083,6 +1153,202 @@ async function addPolyAnomalyProp(id, opts) {
 }
 
 // -----------------------------------------------------------------------------
+// Door + enterable room system
+// -----------------------------------------------------------------------------
+let roomGeneration = 0;
+const roomProfiles = {
+  6: { doorIndex: 7, type: 'tenant013' },   // right side, z=5 — Apartment 013
+  4: { doorIndex: 2, type: 'maintenance' }, // left side, z=-7
+  2: { doorIndex: 9, type: 'utility' },     // right side, z=11
+};
+
+function resetDoorState() {
+  activeRoomZones.length = 0;
+  roomGeneration += 1;
+  for (const d of doorRecords) {
+    d.unlocked = false;
+    d.open = false;
+    d.opening = false;
+    d.roomActive = false;
+    d.roomType = null;
+    d.pivot.rotation.y = 0;
+  }
+}
+
+function doorWorldPoint(d) {
+  return d.knob.getWorldPosition(new THREE.Vector3());
+}
+
+function addAllDoorInteractables() {
+  for (const d of doorRecords) {
+    interactables.push({ type: 'door', door: d, object: d.knob, radius: 1.48, requiresAim: true, aimDot: .60 });
+  }
+}
+
+function jiggleLockedDoor(d) {
+  if (!d || d.opening) return;
+  d.opening = true;
+  showToast('THE DOOR IS LOCKED', 1500);
+  const base = d.pivot.rotation.y;
+  const sequence = [0, .018, -.014, .010, -.006, 0];
+  sequence.forEach((offset, i) => setTimeout(() => {
+    d.pivot.rotation.y = base + offset * d.side;
+    if (i === 1 || i === 3) recorded.play2D('latch', .24, .84 + i * .08) || audio.click();
+    if (i === sequence.length - 1) { d.pivot.rotation.y = base; d.opening = false; }
+  }, i * 62));
+}
+
+function animateApartmentDoor(d, shouldOpen) {
+  if (!d || d.opening || !d.unlocked) return;
+  d.opening = true;
+  const start = d.pivot.rotation.y;
+  const target = shouldOpen ? d.side * 1.43 : 0;
+  const began = performance.now();
+  recorded.play2D('latch', .30, shouldOpen ? .92 : .78) || audio.click();
+  if (shouldOpen) setTimeout(() => recorded.play2D('creak', .18, .76), 130);
+  const frame = (now) => {
+    let t = clamp((now - began) / 620, 0, 1);
+    t = t * t * (3 - 2 * t);
+    d.pivot.rotation.y = lerp(start, target, t);
+    if (t < .999) requestAnimationFrame(frame);
+    else {
+      d.pivot.rotation.y = target;
+      d.open = shouldOpen;
+      d.opening = false;
+    }
+  };
+  requestAnimationFrame(frame);
+}
+
+function handleDoorInteraction(d) {
+  if (!d) return;
+  if (!d.unlocked) { jiggleLockedDoor(d); return; }
+  animateApartmentDoor(d, !d.open);
+}
+
+async function spawnRoomProp(id, opts, generation = roomGeneration) {
+  const obj = await spawnPolyProp(id, { parent: mutable, ...opts });
+  if (generation !== roomGeneration && obj?.parent) obj.parent.remove(obj);
+  return obj;
+}
+
+function buildRoomShell(d, type) {
+  const side = d.side;
+  const z = d.z;
+  const depth = 4.75;
+  const width = 5.15;
+  const roomH = 3.18;
+  const nearX = side * 3.18;
+  const farX = side * (3.18 + depth);
+  const centerX = (nearX + farX) / 2;
+  const farInnerX = side * (3.18 + depth - .18);
+  const g = new THREE.Group();
+  g.name = `room-${type}`;
+  mutable.add(g);
+
+  meshBox('room-floor', new THREE.Vector3(depth, .12, width), new THREE.Vector3(centerX, -.05, z), floorMat, g, false);
+  meshBox('room-ceiling', new THREE.Vector3(depth, .12, width), new THREE.Vector3(centerX, roomH, z), ceilingMat, g, false);
+  meshBox('room-far-wall', new THREE.Vector3(.16, roomH, width), new THREE.Vector3(farX, roomH/2, z), wallMat, g, false);
+  meshBox('room-side-a', new THREE.Vector3(depth, roomH, .16), new THREE.Vector3(centerX, roomH/2, z-width/2), wallMat, g, false);
+  meshBox('room-side-b', new THREE.Vector3(depth, roomH, .16), new THREE.Vector3(centerX, roomH/2, z+width/2), wallMat, g, false);
+
+  // Baseboard / trim makes the spaces read like deliberately dressed rooms, not hollow boxes.
+  meshBox('room-base-far', new THREE.Vector3(.08, .16, width-.14), new THREE.Vector3(farInnerX, .10, z), trimMat, g, false);
+  meshBox('room-base-a', new THREE.Vector3(depth-.2, .16, .08), new THREE.Vector3(centerX, .10, z-width/2+.09), trimMat, g, false);
+  meshBox('room-base-b', new THREE.Vector3(depth-.2, .16, .08), new THREE.Vector3(centerX, .10, z+width/2-.09), trimMat, g, false);
+
+  const fixture = meshBox('room-light-fixture', new THREE.Vector3(.74,.055,.30), new THREE.Vector3(centerX, roomH-.08, z-.35), fixtureMat, g, false);
+  fixture.material = fixtureMat;
+  const light = new THREE.PointLight(type === 'tenant013' ? 0xcbb89a : 0xc9d2cf, type === 'utility' ? 7.5 : 10.5, 6.5, 2);
+  light.position.set(centerX, roomH-.34, z-.35);
+  light.castShadow = false;
+  g.add(light);
+
+  d.roomActive = true;
+  d.roomType = type;
+  activeRoomZones.push({ door: d, side, z, nearX, farX, centerX, width, depth, roomH, group: g });
+  return activeRoomZones.at(-1);
+}
+
+function roomX(zone, inwardMeters) {
+  return zone.side * (3.18 + inwardMeters);
+}
+
+async function dressTenantRoom(zone) {
+  const gen = roomGeneration;
+  const z = zone.z;
+  // Furniture follows real placement logic: storage on walls, chair by table, suitcase at furniture edge,
+  // rubbish in a corner. These are intentionally arranged rather than randomly scattered.
+  await Promise.allSettled([
+    spawnRoomProp('painted_wooden_cabinet', { position:[roomX(zone,4.15),0,z+1.55], rotation:[0, zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.80, name:'013-cabinet' }, gen),
+    spawnRoomProp('small_wooden_table_01', { position:[roomX(zone,3.05),0,z-.55], rotation:[0,.08,0], scale:.76, name:'013-table' }, gen),
+    spawnRoomProp('WoodenChair_01', { position:[roomX(zone,2.35),0,z-.95], rotation:[0,zone.side>0 ? .78 : -.78,0], scale:.68, name:'013-chair' }, gen),
+    spawnRoomProp('vintage_suitcase', { position:[roomX(zone,3.82),.03,z+1.02], rotation:[0,.18,0], scale:.56, name:'013-suitcase' }, gen),
+    spawnRoomProp('trashbag', { position:[roomX(zone,4.08),0,z-1.72], rotation:[0,-.3,0], scale:.62, name:'013-trash' }, gen),
+    spawnRoomProp('fancy_picture_frame_01', { position:[roomX(zone,4.58),1.85,z-.15], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,Math.PI/2], scale:1.05, name:'013-frame' }, gen),
+  ]);
+  if (gen !== roomGeneration) return;
+  if (!state.inventory.fuse) makePartObject('fuse', [roomX(zone,3.0), .78, z-.48]);
+  addRoomWriting(zone, '013', z + 1.82, '#661015');
+}
+
+async function dressMaintenanceRoom(zone) {
+  const gen = roomGeneration;
+  const z = zone.z;
+  await Promise.allSettled([
+    spawnRoomProp('power_box_01', { position:[roomX(zone,4.48),1.08,z], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.95, name:'maint-power-box' }, gen),
+    spawnRoomProp('modular_electric_cables', { position:[roomX(zone,4.38),2.35,z+.58], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.34, name:'maint-cables' }, gen),
+    spawnRoomProp('painted_wooden_bench', { position:[roomX(zone,2.8),0,z-1.55], rotation:[0,0,0], scale:.72, name:'maint-bench' }, gen),
+    spawnRoomProp('cardboard_box_01', { position:[roomX(zone,3.75),0,z+1.55], rotation:[0,-.35,0], scale:.72, name:'maint-box' }, gen),
+    spawnRoomProp('korean_fire_extinguisher_01', { position:[roomX(zone,4.28),.52,z-1.76], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.76, name:'maint-extinguisher' }, gen),
+    spawnRoomProp('barrel_03', { position:[roomX(zone,3.55),0,z+1.35], rotation:[0,.16,0], scale:.58, name:'maint-barrel' }, gen),
+  ]);
+  if (gen !== roomGeneration) return;
+  if (!state.inventory.key) makePartObject('key', [roomX(zone,2.75), .78, z-1.35]);
+  if (!state.weapon) makeWeaponPickup([roomX(zone,2.78), .84, z-1.7]);
+}
+
+async function dressUtilityRoom(zone) {
+  const gen = roomGeneration;
+  const z = zone.z;
+  await Promise.allSettled([
+    spawnRoomProp('utility_box_01', { position:[roomX(zone,4.12),0,z+1.48], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.68, name:'utility-box-room' }, gen),
+    spawnRoomProp('power_box_01', { position:[roomX(zone,4.45),1.10,z-.75], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.9, name:'utility-panel-room' }, gen),
+    spawnRoomProp('modular_electric_cables', { position:[roomX(zone,4.35),2.15,z-.10], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.38, name:'utility-cables-room' }, gen),
+    spawnRoomProp('metal_trash_can', { position:[roomX(zone,3.72),0,z-1.65], rotation:[0,.2,0], scale:.48, name:'utility-trash' }, gen),
+    spawnRoomProp('barrel_03', { position:[roomX(zone,3.2),0,z+1.45], rotation:[0,-.12,0], scale:.58, name:'utility-barrel' }, gen),
+    spawnRoomProp('can_rusted', { position:[roomX(zone,3.58),.16,z+1.10], rotation:[0,.3,.08], scale:.82, name:'utility-can' }, gen),
+  ]);
+  if (gen !== roomGeneration) return;
+  if (!state.inventory.relay) makePartObject('relay', [roomX(zone,3.65), .38, z+.25]);
+}
+
+function addRoomWriting(zone, text, z, color='#5f0c10') {
+  const tex = textTexture(text, color, 'rgba(0,0,0,0)', 500, 180);
+  const mat = new THREE.MeshBasicMaterial({ map:tex, transparent:true, depthWrite:false });
+  mat.userData.ephemeral = true;
+  const p = new THREE.Mesh(new THREE.PlaneGeometry(1.5,.58), mat);
+  p.userData.ephemeralGeometry = true;
+  p.position.set(roomX(zone,4.63),1.75,z);
+  p.rotation.y = zone.side > 0 ? -Math.PI/2 : Math.PI/2;
+  mutable.add(p);
+}
+
+function configureDoorsAndRooms() {
+  resetDoorState();
+  addAllDoorInteractables();
+  const profile = roomProfiles[state.floor];
+  if (!profile) return;
+  const d = doorRecords[profile.doorIndex];
+  if (!d) return;
+  d.unlocked = true;
+  const zone = buildRoomShell(d, profile.type);
+  if (profile.type === 'tenant013') dressTenantRoom(zone);
+  if (profile.type === 'maintenance') dressMaintenanceRoom(zone);
+  if (profile.type === 'utility') dressUtilityRoom(zone);
+}
+
+// -----------------------------------------------------------------------------
 // Objective / pickup system — three components are required to escape Floor 00
 // -----------------------------------------------------------------------------
 const interactables = [];
@@ -1130,6 +1396,53 @@ function makePartObject(id, position) {
   return g;
 }
 
+async function makeWeaponPickup(position) {
+  const gen = roomGeneration;
+  let obj = await spawnRoomProp('pipe_wrench', { position, rotation:[0,.18,Math.PI/2], scale:.62, name:'weapon-pipe-wrench' }, gen);
+  if (gen !== roomGeneration) return null;
+  if (!obj) {
+    const g = new THREE.Group();
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(.035,.045,.62,12), new THREE.MeshStandardMaterial({color:0x7f2921,roughness:.55,metalness:.55}));
+    handle.rotation.z=Math.PI/2; g.add(handle);
+    const jaw = new THREE.Mesh(new THREE.BoxGeometry(.20,.08,.09), metalMat); jaw.position.x=.31; g.add(jaw);
+    g.position.set(...position); mutable.add(g); obj=g;
+  }
+  interactables.push({ type:'weapon', id:'pipe_wrench', object:obj, radius:1.25, prompt:'TAKE PIPE WRENCH', requiresAim:true, aimDot:.45 });
+  return obj;
+}
+
+function collectWeapon(item) {
+  if (!item || item.type !== 'weapon' || state.weapon) return;
+  state.weapon = true;
+  state.weaponDurability = 3;
+  item.object.visible = false;
+  audio.click();
+  showToast('PIPE WRENCH ACQUIRED · LEFT CLICK / B TO SWING', 2300);
+  writeCheckpoint();
+}
+
+let meleeCooldownUntil = 0;
+function meleeAttack() {
+  if (!state.running || state.paused || state.transitioning || state.dead || !state.weapon) return;
+  const now = performance.now();
+  if (now < meleeCooldownUntil) return;
+  meleeCooldownUntil = now + 620;
+  audio.burst(.10,.07,520);
+  const baseRoll = camera.rotation.z;
+  camera.rotation.z += .028;
+  setTimeout(() => { camera.rotation.z = baseRoll; }, 130);
+
+  if (entity.visible && distToEntity() < 2.35 && cameraLooksAt(entity,.52)) {
+    state.beastStunUntil = now + 1700;
+    state.weaponDurability = Math.max(0, state.weaponDurability - 1);
+    const away = entity.position.clone().sub(yaw.position).setY(0).normalize();
+    entity.position.addScaledVector(away, .65);
+    audio.stinger();
+    showToast(state.weaponDurability ? `THE WRENCH CONNECTS · ${state.weaponDurability} HIT${state.weaponDurability===1?'':'S'} LEFT` : 'THE PIPE WRENCH BENDS AND BREAKS', 1500);
+    if (!state.weaponDurability) state.weapon = false;
+  }
+}
+
 function makeEscapePanel(position) {
   const g = new THREE.Group();
   g.name='escape-panel'; g.position.set(...position);
@@ -1147,11 +1460,19 @@ function clearInteractables() { interactables.length = 0; state.currentInteracta
 
 function closestInteractable() {
   let best=null, bestD=Infinity;
+  const look = new THREE.Vector3();
+  camera.getWorldDirection(look);
+  const camPos = camera.getWorldPosition(new THREE.Vector3());
   for (const item of interactables) {
     if (!item.object?.parent) continue;
     const wp=item.object.getWorldPosition(new THREE.Vector3());
-    const d=wp.distanceTo(yaw.position);
-    if(d<item.radius && d<bestD){best=item;bestD=d;}
+    const d=wp.distanceTo(camPos);
+    if (d >= item.radius || d >= bestD) continue;
+    if (item.requiresAim) {
+      const dir = wp.clone().sub(camPos).normalize();
+      if (look.dot(dir) < (item.aimDot ?? .52)) continue;
+    }
+    best=item; bestD=d;
   }
   return best;
 }
@@ -1258,6 +1579,11 @@ const audio = {
   ctx: null,
   master: null,
   noise: null,
+  droneGain: null,
+  droneFilter: null,
+  droneOscA: null,
+  droneOscB: null,
+  droneOscC: null,
   beatTimer: 0,
   init() {
     if (this.ctx) {
@@ -1284,6 +1610,26 @@ const audio = {
     lp.frequency.value = 120;
     osc.connect(lp).connect(g).connect(this.master);
     osc.start();
+
+    // Adaptive horror drone: three deliberately imperfect low tones become louder, brighter and
+    // more dissonant as the creature approaches. It remains subtle at distance so footsteps stay readable.
+    this.droneGain = this.ctx.createGain();
+    this.droneGain.gain.value = .0035;
+    this.droneFilter = this.ctx.createBiquadFilter();
+    this.droneFilter.type = 'lowpass';
+    this.droneFilter.frequency.value = 105;
+    this.droneFilter.Q.value = .7;
+    this.droneOscA = this.ctx.createOscillator();
+    this.droneOscB = this.ctx.createOscillator();
+    this.droneOscC = this.ctx.createOscillator();
+    this.droneOscA.type = 'sine'; this.droneOscA.frequency.value = 34.2;
+    this.droneOscB.type = 'triangle'; this.droneOscB.frequency.value = 35.8;
+    this.droneOscC.type = 'sine'; this.droneOscC.frequency.value = 51.4;
+    for (const o of [this.droneOscA,this.droneOscB,this.droneOscC]) {
+      o.connect(this.droneFilter);
+      o.start();
+    }
+    this.droneFilter.connect(this.droneGain).connect(this.master);
     recorded.init().then(() => recorded.startAmbient());
   },
   setVolume(v) {
@@ -1368,6 +1714,27 @@ const audio = {
   },
   update(dt) {
     if (!this.ctx || !state.running) return;
+
+    // Threat mix is distance-driven, with a small floor-depth bias. The beast becomes audible before
+    // it is obvious visually, but the mix never jumps abruptly when it spawns or vanishes.
+    const floorPressure = clamp((8 - state.floor) / 8, 0, 1);
+    let threat = floorPressure * .16;
+    if (entity.visible) {
+      const d = distToEntity();
+      threat = Math.max(threat, 1 - clamp((d - 1.6) / 17.5, 0, 1));
+      if (state.entityMode === 'hunter' || state.finaleRunning) threat = Math.max(threat, .38);
+    }
+    if (performance.now() < state.beastStunUntil) threat *= .55;
+    if (this.droneGain) {
+      const t = this.ctx.currentTime;
+      this.droneGain.gain.setTargetAtTime(.003 + threat * .052, t, .24);
+      this.droneFilter.frequency.setTargetAtTime(95 + threat * 330, t, .30);
+      this.droneOscA.frequency.setTargetAtTime(34.2 + threat * 2.6, t, .34);
+      this.droneOscB.frequency.setTargetAtTime(35.8 + threat * 5.1, t, .29);
+      this.droneOscC.frequency.setTargetAtTime(51.4 + threat * 8.4, t, .31);
+      if (recorded.ambient) recorded.ambient.setVolume((.12 + floorPressure*.03 + threat*.045) * state.volume);
+    }
+
     this.beatTimer -= dt;
     if (state.heartbeat > .15 && this.beatTimer <= 0) {
       this.tone(48, .09, .035 + .045 * state.heartbeat, 'sine');
@@ -1415,6 +1782,9 @@ addEventListener('mousemove', (e) => {
 renderer.domElement.addEventListener('click', () => {
   setInputMode('mouse');
   if (state.running && !state.paused && !state.dead && !state.transitioning) renderer.domElement.requestPointerLock();
+});
+renderer.domElement.addEventListener('mousedown', (e) => {
+  if (e.button === 0 && document.pointerLockElement === renderer.domElement) meleeAttack();
 });
 
 document.addEventListener('pointerlockchange', () => {
@@ -1469,6 +1839,7 @@ function pollGamepad(dt) {
     pitch = clamp(pitch - ry * dt * 1.95, -1.48, 1.48);
     camera.rotation.x = pitch;
     if (pressedOnce(gp, 0)) interact();          // A / Cross
+    if (pressedOnce(gp, 1)) meleeAttack();       // B / Circle
     if (pressedOnce(gp, 2)) toggleFlashlight();  // X / Square
     if (pressedOnce(gp, 9)) togglePause(true);   // Menu / Options
   } else {
@@ -1496,15 +1867,22 @@ function togglePause(on) {
 
 function canMoveTo(x, z) {
   const r = .32;
-  if (x - r < -3.0 || x + r > 3.0 || z - r < -19.35 || z + r > 19.35) return false;
-  for (const b of blockers) {
-    const cx = Math.max(b.minX, Math.min(x, b.maxX));
-    const cz = Math.max(b.minZ, Math.min(z, b.maxZ));
-    const dx = x - cx;
-    const dz = z - cz;
-    if (dx * dx + dz * dz < r * r) return false;
+  const inCorridor = x - r >= -3.0 && x + r <= 3.0 && z - r >= -19.35 && z + r <= 19.35;
+  if (inCorridor) return true;
+
+  // An enterable room becomes a walkable region only after its actual hinged door is open.
+  for (const zone of activeRoomZones) {
+    if (!zone.door.open) continue;
+    const minZ = zone.z - zone.width/2 + r;
+    const maxZ = zone.z + zone.width/2 - r;
+    const xA = zone.side > 0 ? 2.78 : zone.farX + r;
+    const xB = zone.side > 0 ? zone.farX - r : -2.78;
+    const minX = Math.min(xA,xB), maxX = Math.max(xA,xB);
+    const inRoom = x >= minX && x <= maxX && z >= minZ && z <= maxZ;
+    const inDoorway = Math.abs(z-zone.z) <= .54 && (zone.side > 0 ? x >= 2.58 && x <= 3.90 : x <= -2.58 && x >= -3.90);
+    if (inRoom || inDoorway) return true;
   }
-  return true;
+  return false;
 }
 
 let stepAccum = 0;
@@ -1555,9 +1933,9 @@ function movePlayer(dt) {
 
   // Very small cinematic camera motion: vertical step compression, lateral sway, and sub-degree roll.
   const motion = state.headBob && isMoving ? clamp(state.moveSpeed / 3, 0, 1.4) : 0;
-  const vertical = Math.sin(state.walkPhase * 2) * .0105 * motion;
-  const lateral = Math.cos(state.walkPhase) * .0035 * motion;
-  const roll = Math.sin(state.walkPhase) * .0019 * motion;
+  const vertical = Math.sin(state.walkPhase * 2) * .0140 * motion;
+  const lateral = Math.cos(state.walkPhase) * .0046 * motion;
+  const roll = Math.sin(state.walkPhase) * .0025 * motion;
   const smooth = 1 - Math.exp(-dt * 10);
   camera.position.y = lerp(camera.position.y, 1.68 + vertical, smooth);
   camera.position.x = lerp(camera.position.x, lateral, smooth);
@@ -1577,6 +1955,14 @@ function interact() {
   if (state.transitioning || state.finaleRunning) return;
   const item = closestInteractable();
   if (item) {
+    if (item.type === 'door') {
+      handleDoorInteraction(item.door);
+      return;
+    }
+    if (item.type === 'weapon') {
+      collectWeapon(item);
+      return;
+    }
     if (item.type === 'part') {
       collectPart(item);
       return;
@@ -1613,7 +1999,12 @@ function updatePrompt() {
   state.currentInteractable = item;
   const key = state.inputMode === 'gamepad' ? '[ A ]' : '[ E ]';
   if (item) {
-    promptEl.textContent = `${key}  ${item.prompt}`;
+    if (item.type === 'door') {
+      const d = item.door;
+      promptEl.textContent = `${key}  ${d.unlocked ? (d.open ? 'CLOSE DOOR' : 'OPEN DOOR') : 'TRY DOOR'}`;
+    } else {
+      promptEl.textContent = `${key}  ${item.prompt}`;
+    }
     promptEl.classList.add('prompt-show');
     crosshair.classList.add('crosshair-active');
     return;
@@ -1634,11 +2025,11 @@ function updatePrompt() {
 const floorDescriptions = {
   8: 'Reach the service elevator.',
   7: 'The building settles around you.',
-  6: 'Recover the service fuse near Apartment 013.',
+  6: 'Apartment 013 is open. Search it for the service fuse.',
   5: 'The portraits are not decoration.',
-  4: 'Find the maintenance key. Do not turn around.',
+  4: 'The maintenance room is unsecured. Find the key.',
   3: 'Light keeps it still.',
-  2: 'Recover the override relay.',
+  2: 'Search the utility room for the override relay.',
   1: 'RUN.',
   0: 'Restore the emergency override and escape.',
 };
@@ -1674,7 +2065,7 @@ function updateDoorLabels() {
     else {
       const suffix = String(i + 1).padStart(2, '0');
       text = `${state.floor}${suffix}`;
-      if (state.floor === 6 && i === 5) text = '013';
+      if (state.floor === 6 && i === 7) text = '013';
     }
     d.mesh.material.map.dispose();
     d.mesh.material.map = textTexture(text);
@@ -1718,6 +2109,7 @@ function configureFloor() {
   objectiveEl.textContent = floorDescriptions[state.floor] || 'Go down.';
   setElevatorSigns();
   updateDoorLabels();
+  configureDoorsAndRooms();
   scene.fog.density = .045;
   renderer.toneMappingExposure = .76;
   bloom.strength = .2;
@@ -1743,7 +2135,6 @@ function configureFloor() {
     addWallWriting('013', 5, 1, '#780910');
     addRedPool(5);
     addPolyAnomalyProp('vintage_suitcase', { position: [2.35, .03, 5.9], rotation: [0, -.9, 0], scale: .6, name: '013-suitcase' });
-    if (!state.inventory.fuse) makePartObject('fuse', [2.28, .32, 5.15]);
   }
   if (state.floor === 5) {
     addPolyAnomalyProp('WoodenChair_01', { position: [0, 0, state.direction < 0 ? 10 : -10], rotation: [0, Math.PI, 0], scale: .72, name: 'center-chair' });
@@ -1751,7 +2142,6 @@ function configureFloor() {
   if (state.floor === 4) {
     scene.fog.density = .06;
     addWallWriting('DON’T TURN AROUND', 0, -1, '#4f080a');
-    if (!state.inventory.key) makePartObject('key', [-2.45, .24, -4.6]);
   }
   if (state.floor === 3) {
     state.entityMode = 'watcher';
@@ -1764,7 +2154,6 @@ function configureFloor() {
     scene.fog.density = .072;
     entity.visible = false;
     state.entitySpeed = 2.35;
-    if (!state.inventory.relay) makePartObject('relay', [2.25, .22, 8.2]);
     ceilingLights.forEach((o, i) => {
       if (i % 2 === 1) {
         o.light.color.setHex(0xb30b12);
@@ -1940,6 +2329,7 @@ function moveEntityTowardPlayer(dt, speed) {
 }
 
 function updateEntity(dt) {
+  if (performance.now() < state.beastStunUntil) { animateEntity(dt, 0); return; }
   if (state.floor === 3 && entity.visible) {
     const frozen = state.flashlightOn && cameraLooksAt(entity, .36);
     if (!frozen) {
@@ -2346,6 +2736,8 @@ function writeCheckpoint() {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
       floor: state.floor,
       inventory: { ...state.inventory },
+      weapon: !!state.weapon,
+      weaponDurability: state.weaponDurability || 0,
       savedAt: Date.now(),
     }));
     refreshContinueButton();
@@ -2382,6 +2774,9 @@ function resetGame(checkpoint = null) {
   state.inventory = checkpoint?.inventory ? {
     fuse: !!checkpoint.inventory.fuse, key: !!checkpoint.inventory.key, relay: !!checkpoint.inventory.relay,
   } : { fuse: false, key: false, relay: false };
+  state.weapon = !!checkpoint?.weapon;
+  state.weaponDurability = state.weapon ? Math.max(1, checkpoint?.weaponDurability || 3) : 0;
+  state.beastStunUntil = 0;
   for (const k of Object.keys(keys)) keys[k] = false;
   updateInventoryUI();
   entity.visible = false;
