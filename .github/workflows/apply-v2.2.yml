@@ -1,0 +1,37 @@
+name: Apply NULL FLOOR v2.2 creature integration
+
+on:
+  push:
+    paths:
+      - 'patches/v2.2.READY'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-v22:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply and validate creature integration patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check patches/v2.2-creatures.patch
+          git apply patches/v2.2-creatures.patch
+          node --check src/main.js
+
+      - name: Commit v2.2 creature integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.js
+          git commit -m "feat: integrate rigged hunter and Smiler creature systems"
+          git pull --rebase origin main
+          git push origin HEAD:main
