@@ -1,0 +1,66 @@
+name: Import NULL FLOOR creature assets
+
+on:
+  push:
+    paths:
+      - '.asset-import/READY'
+
+permissions:
+  contents: write
+
+jobs:
+  import-creatures:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct and validate optimized GLBs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p public/assets/creatures
+          cat .asset-import/smiler.part.* | base64 --decode | gzip -dc > public/assets/creatures/smily_horror_monster.glb
+          cat .asset-import/hunter.part.* | base64 --decode | gzip -dc > public/assets/creatures/pale_hunter.glb
+          python - <<'PY'
+          import json, struct, hashlib
+          from pathlib import Path
+
+          expected = {
+            'public/assets/creatures/smily_horror_monster.glb': {
+              'sha256':'b86fe519065a05c618e9d5a3bc3f86daec7144a696cb5664c994ca4d4c91a4bb',
+              'skins':1, 'animations_min':1,
+            },
+            'public/assets/creatures/pale_hunter.glb': {
+              'sha256':'e73d1c8091c101626421b21bcbaa1bf19689018c132f14cb09cc6c9383b83fd9',
+              'skins':1, 'animations_min':6,
+            },
+          }
+          for filename, want in expected.items():
+            data=Path(filename).read_bytes()
+            if data[:4] != b'glTF': raise SystemExit(f'{filename}: invalid GLB magic')
+            if hashlib.sha256(data).hexdigest() != want['sha256']: raise SystemExit(f'{filename}: hash mismatch')
+            _, version, total = struct.unpack_from('<4sII', data, 0)
+            if version != 2 or total != len(data): raise SystemExit(f'{filename}: invalid GLB header')
+            chunk_len, chunk_type = struct.unpack_from('<II', data, 12)
+            if chunk_type != 0x4E4F534A: raise SystemExit(f'{filename}: missing JSON chunk')
+            doc=json.loads(data[20:20+chunk_len].decode('utf-8').rstrip('\x00 '))
+            if len(doc.get('skins',[])) < want['skins']: raise SystemExit(f'{filename}: rig missing')
+            if len(doc.get('animations',[])) < want['animations_min']: raise SystemExit(f'{filename}: animation clips missing')
+            if not doc.get('images'): raise SystemExit(f'{filename}: embedded textures missing')
+            print(filename, len(data), 'bytes', len(doc.get('animations',[])), 'animations')
+          PY
+
+      - name: Commit creature binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .asset-import
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "assets: add optimized rigged horror creatures"
+          git pull --rebase origin main
+          git push origin HEAD:main
