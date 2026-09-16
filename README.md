@@ -1,20 +1,23 @@
-# NULL FLOOR — v2.0 Escape Build
+# NULL FLOOR — v2.1 Interaction Build
 
 A Three.js first-person psychological-horror game built around a service corridor that becomes less physically reliable every time the elevator descends.
 
-## v2.0 highlights
+## v2.1 highlights
 
-- Stable view-relative WASD: `W` is always the direction the player is facing on the horizontal plane; keyboard movement is no longer coupled to the last input device.
-- Subtle smoothed walking camera motion with small vertical compression, lateral sway, and sub-degree roll.
-- Rebuilt elevator: actual cabin volume, textured sliding doors, jambs/threshold, kick panels, handrails, lighting, physical control panel, call button, indicator, speaker grille, bolts, service placard, arrival/departure animation, and ride sequence.
-- Original skeletal horror entities: a standing Stalker and low Crawler with articulated bone hierarchies, painted flesh materials, jaws/teeth, eyes, fingers, authored gaits, attack poses, twitching, stalking, flashlight response, and chase behavior.
-- A real escape objective: recover the Fuse on Floor 06, Maintenance Key on Floor 04, and Override Relay on Floor 02; install them on Floor 00 and survive the chase to the elevator.
-- Floor checkpoints stored in the browser. Death restarts from the current checkpoint rather than wiping the entire descent.
-- Correct Poly Haven glTF dependency resolution through the Poly Haven Files API, fixing the previous guessed texture URLs that could produce 404s/white props.
-- Intentional painted fallback materials for any model whose texture cannot be loaded; environment objects should no longer become plain white placeholders.
-- Poly Haven environment expansion: electrical boxes, industrial sconces, modular wiring, furniture, luggage, utility props, frames, safety equipment, and worn industrial materials.
+- Every apartment door is now physically interactable. Aim at the knob and press `E` / `A` to try it.
+- Most doors are locked. Locked doors visibly jiggle, play a latch/knob response, and display `THE DOOR IS LOCKED`.
+- Three doors across the descent are genuinely enterable, with actual portal openings and room collision rather than fake rooms behind solid walls.
+- Floor 06 — Apartment 013: furnished tenant room containing the Service Fuse.
+- Floor 04 — Maintenance room: industrial equipment, Maintenance Key, and an optional Poly Haven pipe wrench.
+- Floor 02 — Utility room: electrical/service dressing containing the Override Relay.
+- Room decoration follows deliberate placement logic: furniture against usable walls, working areas grouped together, rubbish in corners, fire equipment bracketed, wiring associated with electrical panels, and sconces assembled with mounts/conduit/light sources.
+- Pipe wrench melee: left click / `B` or Circle swings it. A close, aimed hit briefly stuns and pushes back the beast. The improvised weapon only survives three solid hits.
+- Adaptive threat drone: a low dissonant background bed grows louder, brighter, and less stable as the creature approaches and as the player descends.
+- Walking camera motion is slightly stronger than v2.0 while remaining restrained.
+- Stable view-relative WASD remains in place: `W` is always horizontal camera-forward, with axis-separated collision for predictable wall sliding.
+- The rebuilt elevator, Floor 00 escape objective, checkpoints, recorded positional audio, gamepad support, authored anomalies, and post-processing remain integrated.
+- Poly Haven models use their actual glTF dependency manifests, with local caching and deliberate fallback materials to prevent white/untextured props.
 - User-supplied Poly Haven wall/floor/door packs remain bundled locally as optimized 2K PBR sets.
-- Recorded positional audio, authored anomalies, gamepad support, post-processing, dynamic lighting, and the Floor 00 finale remain integrated.
 
 ## Run
 
@@ -23,7 +26,7 @@ npm install
 npm run dev
 ```
 
-`npm install` installs the dependencies listed in `package.json` (Three.js and Vite). `npm run dev` runs the Vite development script and starts the local web server. Open the **Local** address Vite prints in the terminal.
+`npm install` installs the dependencies listed in `package.json` (Three.js and Vite). `npm run dev` starts the Vite development server. Open the **Local** address Vite prints in the terminal.
 
 ### Recommended before a release build
 
@@ -33,25 +36,25 @@ npm run build
 npm run preview
 ```
 
-`npm run assets` executes `tools/cache-assets.mjs` and caches selected Poly Haven models/materials plus recorded audio under `public/assets/`. The new cacher reads Poly Haven's file manifest and downloads every dependency the glTF actually references instead of guessing texture filenames.
+`npm run assets` runs `tools/cache-assets.mjs` and caches selected Poly Haven models/materials plus recorded audio under `public/assets/`. The cacher reads Poly Haven's file manifest and downloads every dependency referenced by each glTF instead of guessing texture filenames.
 
 `npm run build` creates the optimized Vite production build. `npm run preview` serves that production build locally for final testing.
 
 ## Controls
 
-Keyboard/mouse: `W A S D` move, mouse look, `Shift` sprint, `E` interact, `F` flashlight, `Esc` pause.
+Keyboard/mouse: `W A S D` move, mouse look, `Shift` sprint, `E` interact/try door, `F` flashlight, left click use melee weapon when carried, `Esc` pause.
 
-Gamepad: left stick move, right stick look, `A / Cross` interact, `X / Square` flashlight, `LB` / left-stick click / right trigger sprint, `Menu / Options` pause.
+Gamepad: left stick move, right stick look, `A / Cross` interact/try door, `B / Circle` melee, `X / Square` flashlight, `LB` / left-stick click / right trigger sprint, `Menu / Options` pause.
 
 ## How the player wins
 
-The descent is no longer just “walk to the next elevator.” Three override components are distributed across the building:
+The player must search the building rather than simply reach each elevator:
 
-- Floor 06 — Service Fuse
-- Floor 04 — Maintenance Key
-- Floor 02 — Override Relay
+- Floor 06 — enter Apartment 013 and recover the Service Fuse.
+- Floor 04 — enter the Maintenance room and recover the Maintenance Key; the pipe wrench is optional.
+- Floor 02 — enter the Utility room and recover the Override Relay.
 
-On Floor 00, the player installs all three in the red emergency panel. This powers the lobby elevator but also releases the Stalker into a final chase. The player wins only by physically reaching the open elevator before the creature catches them. The doors close during the escape and the game presents the completed-prologue screen.
+On Floor 00, install all three components in the red emergency panel. This powers the lobby elevator but releases the Stalker into the final chase. The player wins only by physically reaching the open elevator before the creature catches them.
 
 ## Surface pipeline
 
@@ -63,7 +66,7 @@ public/assets/surfaces/concrete_floor_02/
 public/assets/surfaces/rough_pine_door/
 ```
 
-Each includes 2K diffuse, OpenGL normal, roughness, and height maps. The height map is used as restrained bump detail, avoiding the cost of heavily tessellated geometry.
+Each includes 2K diffuse, OpenGL normal, roughness, and height maps. Height is used as restrained bump detail rather than expensive high-density displacement geometry.
 
 ## Model reliability / white-object fix
 
@@ -78,6 +81,10 @@ For the commercial build, run `npm run assets` and deploy the resulting local `p
 
 See `ASSET_SOURCES.md` for provenance and licensing.
 
+## Creature model slot
+
+The runtime already imports `GLTFLoader`. A production monster should preferably be supplied as a `.glb` containing mesh, skeleton, materials/textures, and animation clips. `.gltf` with dependencies or FBX can also be adapted. The current procedural Stalker/Crawler remain fallbacks until the final authored creature asset is integrated.
+
 ## Release status
 
-v2.0 is the strongest playable build so far and the loop is now winnable. It still needs real cross-browser/GPU playtesting and final visual QA on the target hosting environment before taking money. In particular, verify prop scale/orientation, audio loudness, collision edge cases, the final chase difficulty, and production checkout before launch.
+v2.1 adds the first real exploration/interior layer and substantially improves environmental believability. It still needs real browser/GPU playtesting and final visual QA before charging customers. Verify room doorway collision, prop scale/orientation, audio loudness, door readability, melee balance, monster animation integration, final chase difficulty, and production checkout before launch.
