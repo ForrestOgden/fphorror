@@ -1,0 +1,298 @@
+--- a/src/main.js
++++ b/src/main.js
+@@ -1065,6 +1065,232 @@
+ const entity = buildRiggedCreature('stalker');
+ const crawler = buildRiggedCreature('crawler');
+ 
++// -----------------------------------------------------------------------------
++// Imported creature visuals — user-supplied rigged GLBs with procedural fallback
++// -----------------------------------------------------------------------------
++// The procedural Stalker remains as a fail-safe if a model cannot be loaded. When the
++// production hunter finishes loading, only the fallback meshes are hidden; its root stays
++// in place so the existing pursuit/collision/AI code does not need a second movement path.
++const proceduralEntityMeshes = [];
++entity.traverse((o) => { if (o.isMesh) proceduralEntityMeshes.push(o); });
++
++const hunterRuntime = {
++  loaded: false,
++  anchor: null,
++  source: null,
++  mixer: null,
++  clips: new Map(),
++  currentKey: null,
++  currentAction: null,
++  actionLockUntil: 0,
++};
++const smilerRuntime = {
++  loaded: false,
++  anchor: null,
++  source: null,
++  mixer: null,
++  clips: new Map(),
++  currentKey: null,
++  currentAction: null,
++  hideTimer: 0,
++};
++
++function creatureAssetURLs(file) {
++  return [
++    `./assets/creatures/${file}`,
++    `./public/assets/creatures/${file}`,
++  ];
++}
++
++function loadEmbeddedGLTF(url) {
++  return new Promise((resolve, reject) => gltfLoader.load(url, resolve, undefined, reject));
++}
++
++async function loadFirstCreatureGLTF(file) {
++  let lastError;
++  for (const url of creatureAssetURLs(file)) {
++    try { return await loadEmbeddedGLTF(url); }
++    catch (err) { lastError = err; }
++  }
++  throw lastError || new Error(`Unable to load creature asset ${file}`);
++}
++
++function prepareCreatureModel(root) {
++  root.traverse((o) => {
++    if (!o.isMesh) return;
++    o.castShadow = true;
++    o.receiveShadow = true;
++    if (o.isSkinnedMesh) {
++      o.frustumCulled = false; // animated limbs can leave the bind-pose bounds during attacks.
++      o.skeleton?.update?.();
++      o.computeBoundingBox?.();
++      o.computeBoundingSphere?.();
++    }
++    const materials = Array.isArray(o.material) ? o.material : [o.material];
++    for (const m of materials) {
++      if (!m) continue;
++      // Preserve authored color/texture information. This explicitly avoids the white-object
++      // failure mode that the early environment build had when a material arrived unpainted.
++      if (m.map && m.color) m.color.setHex(0xffffff);
++      m.envMapIntensity = .25;
++      m.needsUpdate = true;
++    }
++  });
++  return root;
++}
++
++function normalizeCreatureModel(root, targetMax = 2.75) {
++  const anchor = new THREE.Group();
++  anchor.name = 'creature-visual-anchor';
++  anchor.add(root);
++  prepareCreatureModel(root);
++  root.updateMatrixWorld(true);
++  let box = new THREE.Box3().setFromObject(root, true);
++  let size = box.getSize(new THREE.Vector3());
++  const extent = Math.max(size.x, size.y, size.z, .001);
++  root.scale.multiplyScalar(targetMax / extent);
++  root.updateMatrixWorld(true);
++  box = new THREE.Box3().setFromObject(root, true);
++  const center = box.getCenter(new THREE.Vector3());
++  // Centre horizontally and put the lowest point on the floor. This makes the importer resilient
++  // to Sketchfab/FBX unit conversions and odd root-node offsets without baking asset-specific numbers.
++  root.position.x -= center.x;
++  root.position.z -= center.z;
++  root.position.y -= box.min.y;
++  root.updateMatrixWorld(true);
++  return anchor;
++}
++
++function indexCreatureClips(runtime, animations) {
++  runtime.clips.clear();
++  for (const clip of animations || []) {
++    const name = (clip.name || '').toLowerCase();
++    runtime.clips.set(name, clip);
++  }
++}
++
++function findCreatureClip(runtime, suffixes) {
++  const tests = Array.isArray(suffixes) ? suffixes : [suffixes];
++  for (const suffix of tests) {
++    const q = suffix.toLowerCase();
++    for (const [name, clip] of runtime.clips) {
++      if (name === q || name.endsWith(q)) return clip;
++    }
++  }
++  return null;
++}
++
++function playCreatureAction(runtime, key, suffixes, { once = false, fade = .18, timeScale = 1 } = {}) {
++  if (!runtime.loaded || !runtime.mixer) return null;
++  const clip = findCreatureClip(runtime, suffixes);
++  if (!clip) return null;
++  if (runtime.currentKey === key && runtime.currentAction?.isRunning?.()) return runtime.currentAction;
++  const next = runtime.mixer.clipAction(clip);
++  next.enabled = true;
++  next.reset();
++  next.setEffectiveTimeScale(timeScale);
++  next.setEffectiveWeight(1);
++  next.clampWhenFinished = once;
++  next.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, once ? 1 : Infinity);
++  next.play();
++  if (runtime.currentAction && runtime.currentAction !== next) runtime.currentAction.crossFadeTo(next, fade, false);
++  runtime.currentKey = key;
++  runtime.currentAction = next;
++  return next;
++}
++
++function updateHunterAnimation(dt, velocity = 0) {
++  if (!hunterRuntime.loaded || !hunterRuntime.mixer) return;
++  const now = performance.now();
++  hunterRuntime.mixer.update(dt);
++  if (now < state.beastStunUntil) {
++    playCreatureAction(hunterRuntime, 'panic', ['|panic'], { fade: .08, timeScale: 1.12 });
++    return;
++  }
++  if (now < hunterRuntime.actionLockUntil) return;
++  const d = entity.position.distanceTo(yaw.position);
++  const attacking = entity.visible && d < 1.62 && (state.entityMode === 'hunter' || state.finaleRunning || state.floor <= 2);
++  if (attacking) {
++    const action = playCreatureAction(hunterRuntime, 'attack', ['|attackjump'], { once: true, fade: .06, timeScale: 1.12 });
++    const clip = action?.getClip?.();
++    hunterRuntime.actionLockUntil = now + Math.max(580, ((clip?.duration || .9) / 1.12) * 1000 * .88);
++    return;
++  }
++  if (velocity > 3.05) playCreatureAction(hunterRuntime, 'run', ['|running'], { fade: .12, timeScale: 1.06 });
++  else if (velocity > .12) playCreatureAction(hunterRuntime, 'walk', ['|walk2'], { fade: .18, timeScale: .96 });
++  else if (state.entityMode === 'watcher' || state.entityMode === 'still') playCreatureAction(hunterRuntime, 'look', ['|idle3lookaround'], { fade: .28, timeScale: .78 });
++  else playCreatureAction(hunterRuntime, 'idle', ['|idle2'], { fade: .24, timeScale: .9 });
++}
++
++function hideSmiler() {
++  clearTimeout(smilerRuntime.hideTimer);
++  if (smilerRuntime.anchor) smilerRuntime.anchor.visible = false;
++}
++
++function showSmilerApparition(position, duration = 1550) {
++  if (!smilerRuntime.loaded || !smilerRuntime.anchor) {
++    const fallback = addShadowFigure(position.z, position.x, .72);
++    setTimeout(() => { if (fallback.parent) fallback.parent.remove(fallback); }, duration);
++    return;
++  }
++  const root = smilerRuntime.anchor;
++  root.position.copy(position);
++  root.visible = true;
++  root.lookAt(yaw.position.x, 1.45, yaw.position.z);
++  playCreatureAction(smilerRuntime, 'manifest', ['armatureaction'], { fade: 0, timeScale: .92 });
++  scareFlash(.16);
++  audio.stinger();
++  clearTimeout(smilerRuntime.hideTimer);
++  smilerRuntime.hideTimer = setTimeout(() => {
++    if (!root.visible) return;
++    root.visible = false;
++    recorded.playSpatial('creak', position.clone().add(new THREE.Vector3(0, 1.2, 0)), .15, .8, 10, .68);
++  }, duration);
++}
++
++async function loadCreatureModels() {
++  const hunterTask = (async () => {
++    try {
++      const gltf = await loadFirstCreatureGLTF('pale_hunter.glb');
++      const anchor = normalizeCreatureModel(gltf.scene, 2.82);
++      anchor.name = 'pale-hunter-visual';
++      anchor.visible = true;
++      entity.add(anchor);
++      hunterRuntime.anchor = anchor;
++      hunterRuntime.source = gltf.scene;
++      hunterRuntime.mixer = new THREE.AnimationMixer(gltf.scene);
++      indexCreatureClips(hunterRuntime, gltf.animations);
++      hunterRuntime.loaded = true;
++      // Hide only the original generated geometry. Its bone hierarchy remains a harmless fallback rig.
++      proceduralEntityMeshes.forEach((m) => { m.visible = false; });
++      playCreatureAction(hunterRuntime, 'idle', ['|idle2'], { fade: 0, timeScale: .9 });
++      console.info(`[NULL FLOOR] Pale Hunter loaded with ${gltf.animations.length} animation clips.`);
++    } catch (err) {
++      console.warn('[NULL FLOOR] Rigged hunter failed to load; procedural Stalker remains active.', err);
++    }
++  })();
++
++  const smilerTask = (async () => {
++    try {
++      const gltf = await loadFirstCreatureGLTF('smily_horror_monster.glb');
++      const anchor = normalizeCreatureModel(gltf.scene, 2.58);
++      anchor.name = 'smiler-apparition';
++      anchor.visible = false;
++      scene.add(anchor);
++      smilerRuntime.anchor = anchor;
++      smilerRuntime.source = gltf.scene;
++      smilerRuntime.mixer = new THREE.AnimationMixer(gltf.scene);
++      indexCreatureClips(smilerRuntime, gltf.animations);
++      smilerRuntime.loaded = true;
++      console.info(`[NULL FLOOR] Smiler apparition loaded with ${gltf.animations.length} animation clip.`);
++    } catch (err) {
++      console.warn('[NULL FLOOR] Smiler failed to load; shadow apparition fallback remains active.', err);
++    }
++  })();
++
++  await Promise.allSettled([hunterTask, smilerTask]);
++}
++
+ function animateCreature(creature, dt, velocity = 0, attack = false) {
+   if (!creature.visible) return;
+   const r = creature.userData.rig;
+@@ -1095,7 +1321,10 @@
+   }
+ }
+ 
+-function animateEntity(dt, velocity = 0) { animateCreature(entity, dt, velocity, state.entityMode==='hunter' || state.finaleRunning); }
++function animateEntity(dt, velocity = 0) {
++  animateCreature(entity, dt, velocity, state.entityMode==='hunter' || state.finaleRunning);
++  updateHunterAnimation(dt, velocity);
++}
+ 
+ // -----------------------------------------------------------------------------
+ // Mutable props / anomalies
+@@ -1486,7 +1715,14 @@
+   showToast(`${partMeta[item.id].label} ACQUIRED`);
+   updateObjectiveText();
+   writeCheckpoint();
+-  if (item.id==='fuse') { scareFlash(.13); audio.whisperAt(new THREE.Vector3(3.05,1.6,5)); }
++  if (item.id==='fuse') {
++    scareFlash(.13);
++    audio.whisperAt(new THREE.Vector3(3.05,1.6,5));
++    // A second creature is reserved for authored apparitions rather than pursuit. It appears deeper
++    // in Apartment 013 for just long enough to register, then disappears before the player can reach it.
++    const zone = activeRoomZones.find((z) => z.roomType === 'tenant013');
++    if (zone) setTimeout(() => showSmilerApparition(new THREE.Vector3(roomX(zone, 4.05), 0, zone.z + 1.0), 1350), 420);
++  }
+   if (item.id==='key') { audio.remoteFootstep(new THREE.Vector3(yaw.position.x,0,yaw.position.z+4)); }
+   if (item.id==='relay') { cascadeLightsOff(state.direction>0,95); setTimeout(restoreLights,900); }
+ }
+@@ -2104,6 +2340,7 @@
+   state.entitySpeed = 0;
+   entity.visible = false;
+   crawler.visible = false;
++  hideSmiler();
+   blood.style.opacity = 0;
+   floorTag.textContent = `FLOOR ${String(state.floor).padStart(2, '0')}`;
+   objectiveEl.textContent = floorDescriptions[state.floor] || 'Go down.';
+@@ -2465,6 +2702,12 @@
+     audio.remoteFootstep(behind);
+   });
+ 
++  // 8b. The Smiler manifests once at medium distance after the chair relocation — floor 5.
++  if (state.floor === 5 && p > 7.0 && Math.abs(playerZ) < 7.5) triggerOnce('f5-smiler-manifest', () => {
++    const z = clamp(yaw.position.z + (state.direction < 0 ? -6.2 : 6.2), -15, 15);
++    showSmilerApparition(new THREE.Vector3(state.direction < 0 ? 1.25 : -1.25, 0, z), 1650);
++  });
++
+   // 9. Footsteps approach from ahead, then continue behind — floor 4.
+   if (state.floor === 4 && p > 2.5) triggerOnce('f4-steps', () => {
+     const start = new THREE.Vector3(0, 0, farEnd);
+@@ -2872,6 +3115,7 @@
+     updateLights();
+   }
+   if (entity.visible && state.entityMode === 'hidden') animateEntity(dt, 0);
++  if (smilerRuntime.loaded && smilerRuntime.anchor?.visible) smilerRuntime.mixer?.update(dt);
+   flashlight.intensity = state.flashlightOn ? 43 + Math.sin(state.elapsed * 31) * .45 : 0;
+   dust.rotation.y = Math.sin(state.elapsed * .055) * .012;
+   dust.position.y = Math.sin(state.elapsed * .11) * .035;
+@@ -2895,4 +3139,5 @@
+ upgradeSurfaces();
+ populatePolyHavenDecor();
+ recorded.init();
++loadCreatureModels();
+ 
