@@ -4,10 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "restore": "node tools/restore-core.mjs",
-    "predev": "npm run restore",
     "dev": "vite --host 0.0.0.0",
-    "prebuild": "npm run restore",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
     "assets": "node tools/cache-assets.mjs",
