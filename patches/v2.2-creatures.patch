@@ -290,9 +290,3 @@
    flashlight.intensity = state.flashlightOn ? 43 + Math.sin(state.elapsed * 31) * .45 : 0;
    dust.rotation.y = Math.sin(state.elapsed * .055) * .012;
    dust.position.y = Math.sin(state.elapsed * .11) * .035;
-@@ -2895,4 +3139,5 @@
- upgradeSurfaces();
- populatePolyHavenDecor();
- recorded.init();
-+loadCreatureModels();
- 
