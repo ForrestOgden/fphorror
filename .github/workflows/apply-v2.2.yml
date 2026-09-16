@@ -23,6 +23,18 @@ jobs:
           set -euo pipefail
           git apply --check patches/v2.2-creatures.patch
           git apply patches/v2.2-creatures.patch
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/main.js')
+          s = p.read_text()
+          needle = "populatePolyHavenDecor();\nrecorded.init();"
+          repl = "populatePolyHavenDecor();\nrecorded.init();\nloadCreatureModels();"
+          if 'loadCreatureModels();' not in s[s.rfind('// Initial async art pass.'):]:
+              if needle not in s:
+                  raise SystemExit('Could not locate initial art-pass hook')
+              s = s.replace(needle, repl, 1)
+              p.write_text(s)
+          PY
           node --check src/main.js
 
       - name: Commit v2.2 creature integration
