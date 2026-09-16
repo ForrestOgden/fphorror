@@ -3,7 +3,7 @@ name: Apply NULL FLOOR v2.1 gameplay patch
 on:
   push:
     paths:
-      - 'patches/v2.1.patch.zb64'
+      - 'patches/v2.1.READY'
 
 permissions:
   contents: write
@@ -17,16 +17,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Decode and validate patch
+      - name: Assemble and validate readable patch
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import base64, zlib
-          from pathlib import Path
-          encoded = Path('patches/v2.1.patch.zb64').read_text().strip()
-          Path('/tmp/v2.1.patch').write_bytes(zlib.decompress(base64.b64decode(encoded)))
-          PY
+          cat patches/v2.1.part.* > /tmp/v2.1.patch
           git apply --check /tmp/v2.1.patch
           git apply /tmp/v2.1.patch
           node --check src/main.js
