@@ -1,0 +1,180 @@
++  roomGeneration += 1;
++  for (const d of doorRecords) {
++    d.unlocked = false;
++    d.open = false;
++    d.opening = false;
++    d.roomActive = false;
++    d.roomType = null;
++    d.pivot.rotation.y = 0;
++  }
++}
++
++function doorWorldPoint(d) {
++  return d.knob.getWorldPosition(new THREE.Vector3());
++}
++
++function addAllDoorInteractables() {
++  for (const d of doorRecords) {
++    interactables.push({ type: 'door', door: d, object: d.knob, radius: 1.48, requiresAim: true, aimDot: .60 });
++  }
++}
++
++function jiggleLockedDoor(d) {
++  if (!d || d.opening) return;
++  d.opening = true;
++  showToast('THE DOOR IS LOCKED', 1500);
++  const base = d.pivot.rotation.y;
++  const sequence = [0, .018, -.014, .010, -.006, 0];
++  sequence.forEach((offset, i) => setTimeout(() => {
++    d.pivot.rotation.y = base + offset * d.side;
++    if (i === 1 || i === 3) recorded.play2D('latch', .24, .84 + i * .08) || audio.click();
++    if (i === sequence.length - 1) { d.pivot.rotation.y = base; d.opening = false; }
++  }, i * 62));
++}
++
++function animateApartmentDoor(d, shouldOpen) {
++  if (!d || d.opening || !d.unlocked) return;
++  d.opening = true;
++  const start = d.pivot.rotation.y;
++  const target = shouldOpen ? d.side * 1.43 : 0;
++  const began = performance.now();
++  recorded.play2D('latch', .30, shouldOpen ? .92 : .78) || audio.click();
++  if (shouldOpen) setTimeout(() => recorded.play2D('creak', .18, .76), 130);
++  const frame = (now) => {
++    let t = clamp((now - began) / 620, 0, 1);
++    t = t * t * (3 - 2 * t);
++    d.pivot.rotation.y = lerp(start, target, t);
++    if (t < .999) requestAnimationFrame(frame);
++    else {
++      d.pivot.rotation.y = target;
++      d.open = shouldOpen;
++      d.opening = false;
++    }
++  };
++  requestAnimationFrame(frame);
++}
++
++function handleDoorInteraction(d) {
++  if (!d) return;
++  if (!d.unlocked) { jiggleLockedDoor(d); return; }
++  animateApartmentDoor(d, !d.open);
++}
++
++async function spawnRoomProp(id, opts, generation = roomGeneration) {
++  const obj = await spawnPolyProp(id, { parent: mutable, ...opts });
++  if (generation !== roomGeneration && obj?.parent) obj.parent.remove(obj);
++  return obj;
++}
++
++function buildRoomShell(d, type) {
++  const side = d.side;
++  const z = d.z;
++  const depth = 4.75;
++  const width = 5.15;
++  const roomH = 3.18;
++  const nearX = side * 3.18;
++  const farX = side * (3.18 + depth);
++  const centerX = (nearX + farX) / 2;
++  const farInnerX = side * (3.18 + depth - .18);
++  const g = new THREE.Group();
++  g.name = `room-${type}`;
++  mutable.add(g);
++
++  meshBox('room-floor', new THREE.Vector3(depth, .12, width), new THREE.Vector3(centerX, -.05, z), floorMat, g, false);
++  meshBox('room-ceiling', new THREE.Vector3(depth, .12, width), new THREE.Vector3(centerX, roomH, z), ceilingMat, g, false);
++  meshBox('room-far-wall', new THREE.Vector3(.16, roomH, width), new THREE.Vector3(farX, roomH/2, z), wallMat, g, false);
++  meshBox('room-side-a', new THREE.Vector3(depth, roomH, .16), new THREE.Vector3(centerX, roomH/2, z-width/2), wallMat, g, false);
++  meshBox('room-side-b', new THREE.Vector3(depth, roomH, .16), new THREE.Vector3(centerX, roomH/2, z+width/2), wallMat, g, false);
++
++  // Baseboard / trim makes the spaces read like deliberately dressed rooms, not hollow boxes.
++  meshBox('room-base-far', new THREE.Vector3(.08, .16, width-.14), new THREE.Vector3(farInnerX, .10, z), trimMat, g, false);
++  meshBox('room-base-a', new THREE.Vector3(depth-.2, .16, .08), new THREE.Vector3(centerX, .10, z-width/2+.09), trimMat, g, false);
++  meshBox('room-base-b', new THREE.Vector3(depth-.2, .16, .08), new THREE.Vector3(centerX, .10, z+width/2-.09), trimMat, g, false);
++
++  const fixture = meshBox('room-light-fixture', new THREE.Vector3(.74,.055,.30), new THREE.Vector3(centerX, roomH-.08, z-.35), fixtureMat, g, false);
++  fixture.material = fixtureMat;
++  const light = new THREE.PointLight(type === 'tenant013' ? 0xcbb89a : 0xc9d2cf, type === 'utility' ? 7.5 : 10.5, 6.5, 2);
++  light.position.set(centerX, roomH-.34, z-.35);
++  light.castShadow = false;
++  g.add(light);
++
++  d.roomActive = true;
++  d.roomType = type;
++  activeRoomZones.push({ door: d, side, z, nearX, farX, centerX, width, depth, roomH, group: g });
++  return activeRoomZones.at(-1);
++}
++
++function roomX(zone, inwardMeters) {
++  return zone.side * (3.18 + inwardMeters);
++}
++
++async function dressTenantRoom(zone) {
++  const gen = roomGeneration;
++  const z = zone.z;
++  // Furniture follows real placement logic: storage on walls, chair by table, suitcase at furniture edge,
++  // rubbish in a corner. These are intentionally arranged rather than randomly scattered.
++  await Promise.allSettled([
++    spawnRoomProp('painted_wooden_cabinet', { position:[roomX(zone,4.15),0,z+1.55], rotation:[0, zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.80, name:'013-cabinet' }, gen),
++    spawnRoomProp('small_wooden_table_01', { position:[roomX(zone,3.05),0,z-.55], rotation:[0,.08,0], scale:.76, name:'013-table' }, gen),
++    spawnRoomProp('WoodenChair_01', { position:[roomX(zone,2.35),0,z-.95], rotation:[0,zone.side>0 ? .78 : -.78,0], scale:.68, name:'013-chair' }, gen),
++    spawnRoomProp('vintage_suitcase', { position:[roomX(zone,3.82),.03,z+1.02], rotation:[0,.18,0], scale:.56, name:'013-suitcase' }, gen),
++    spawnRoomProp('trashbag', { position:[roomX(zone,4.08),0,z-1.72], rotation:[0,-.3,0], scale:.62, name:'013-trash' }, gen),
++    spawnRoomProp('fancy_picture_frame_01', { position:[roomX(zone,4.58),1.85,z-.15], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,Math.PI/2], scale:1.05, name:'013-frame' }, gen),
++  ]);
++  if (gen !== roomGeneration) return;
++  if (!state.inventory.fuse) makePartObject('fuse', [roomX(zone,3.0), .78, z-.48]);
++  addRoomWriting(zone, '013', z + 1.82, '#661015');
++}
++
++async function dressMaintenanceRoom(zone) {
++  const gen = roomGeneration;
++  const z = zone.z;
++  await Promise.allSettled([
++    spawnRoomProp('power_box_01', { position:[roomX(zone,4.48),1.08,z], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.95, name:'maint-power-box' }, gen),
++    spawnRoomProp('modular_electric_cables', { position:[roomX(zone,4.38),2.35,z+.58], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.34, name:'maint-cables' }, gen),
++    spawnRoomProp('painted_wooden_bench', { position:[roomX(zone,2.8),0,z-1.55], rotation:[0,0,0], scale:.72, name:'maint-bench' }, gen),
++    spawnRoomProp('cardboard_box_01', { position:[roomX(zone,3.75),0,z+1.55], rotation:[0,-.35,0], scale:.72, name:'maint-box' }, gen),
++    spawnRoomProp('korean_fire_extinguisher_01', { position:[roomX(zone,4.28),.52,z-1.76], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.76, name:'maint-extinguisher' }, gen),
++    spawnRoomProp('barrel_03', { position:[roomX(zone,3.55),0,z+1.35], rotation:[0,.16,0], scale:.58, name:'maint-barrel' }, gen),
++  ]);
++  if (gen !== roomGeneration) return;
++  if (!state.inventory.key) makePartObject('key', [roomX(zone,2.75), .78, z-1.35]);
++  if (!state.weapon) makeWeaponPickup([roomX(zone,2.78), .84, z-1.7]);
++}
++
++async function dressUtilityRoom(zone) {
++  const gen = roomGeneration;
++  const z = zone.z;
++  await Promise.allSettled([
++    spawnRoomProp('utility_box_01', { position:[roomX(zone,4.12),0,z+1.48], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.68, name:'utility-box-room' }, gen),
++    spawnRoomProp('power_box_01', { position:[roomX(zone,4.45),1.10,z-.75], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.9, name:'utility-panel-room' }, gen),
++    spawnRoomProp('modular_electric_cables', { position:[roomX(zone,4.35),2.15,z-.10], rotation:[0,zone.side>0 ? -Math.PI/2 : Math.PI/2,0], scale:.38, name:'utility-cables-room' }, gen),
++    spawnRoomProp('metal_trash_can', { position:[roomX(zone,3.72),0,z-1.65], rotation:[0,.2,0], scale:.48, name:'utility-trash' }, gen),
++    spawnRoomProp('barrel_03', { position:[roomX(zone,3.2),0,z+1.45], rotation:[0,-.12,0], scale:.58, name:'utility-barrel' }, gen),
++    spawnRoomProp('can_rusted', { position:[roomX(zone,3.58),.16,z+1.10], rotation:[0,.3,.08], scale:.82, name:'utility-can' }, gen),
++  ]);
++  if (gen !== roomGeneration) return;
++  if (!state.inventory.relay) makePartObject('relay', [roomX(zone,3.65), .38, z+.25]);
++}
++
++function addRoomWriting(zone, text, z, color='#5f0c10') {
++  const tex = textTexture(text, color, 'rgba(0,0,0,0)', 500, 180);
++  const mat = new THREE.MeshBasicMaterial({ map:tex, transparent:true, depthWrite:false });
++  mat.userData.ephemeral = true;
++  const p = new THREE.Mesh(new THREE.PlaneGeometry(1.5,.58), mat);
++  p.userData.ephemeralGeometry = true;
++  p.position.set(roomX(zone,4.63),1.75,z);
++  p.rotation.y = zone.side > 0 ? -Math.PI/2 : Math.PI/2;
++  mutable.add(p);
++}
++
++function configureDoorsAndRooms() {
++  resetDoorState();
++  addAllDoorInteractables();
++  const profile = roomProfiles[state.floor];
++  if (!profile) return;
++  const d = doorRecords[profile.doorIndex];
++  if (!d) return;
++  d.unlocked = true;
++  const zone = buildRoomShell(d, profile.type);
++  if (profile.type === 'tenant013') dressTenantRoom(zone);
